@@ -17,6 +17,7 @@ import org.springframework.util.function.ThrowingConsumer;
 import java.io.File;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.sql.JDBCType;
 import java.sql.Timestamp;
 import java.text.SimpleDateFormat;
 import java.time.LocalDate;
@@ -43,10 +44,13 @@ public class Main implements CommandLineRunner {
     @Override
     public void run(String... args) throws Exception {
         log.info("starting");
-        Timestamp time = new Timestamp(ZonedDateTime.parse("2023-06-01T12:00:00+02:00").toInstant().toEpochMilli());
+        ZonedDateTime zonedDateTime1 = ZonedDateTime.parse("2023-06-01T12:00:00+02:00");
+        Timestamp timestamp1 = new Timestamp(zonedDateTime1.toInstant().toEpochMilli());
+        long linuxTime1 = zonedDateTime1.toInstant().getEpochSecond();
+        long linuxTime2 = zonedDateTime1.plusMinutes(1).toInstant().getEpochSecond();
 
         log.info("rows as list of Maps");
-        List<Map<String, Object>> rows = jdbc.queryForList("SELECT * FROM workload WHERE day>=? LIMIT 5", time);
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT * FROM workload WHERE day>=? LIMIT 5", timestamp1);
         for (Map<String, Object> row : rows) {
             Integer id = (Integer) row.get("id");
             java.sql.Date day = (java.sql.Date) row.get("day");
@@ -58,7 +62,7 @@ public class Main implements CommandLineRunner {
         List<Workload> workloads = jdbc.query(
                 "SELECT id,day,cpu,jobs_time,utilization_ratio FROM workload WHERE day>=? LIMIT 5",
                 new DataClassRowMapper<>(Workload.class),
-                time);
+                timestamp1);
         // write rows into a CSV file
         try (SequenceWriter sw = csvSequenceWriter(Workload.class, "workloads.csv")) {
             for (Workload workload : workloads) {
@@ -77,13 +81,40 @@ public class Main implements CommandLineRunner {
                                         to_timestamp(end_time) as end_time
                                     FROM acct_pbs_record
                                     WHERE start_time>?
-                                    ORDER BY start_time
-                                    LIMIT 20
+                                    ORDER BY start_time, acct_id_string
+                                    LIMIT 17
                                     """,
                             new DataClassRowMapper<>(Job.class),
-                            time.toInstant().getEpochSecond() // linux time (seconds since epoch)
+                            linuxTime1
                     )
                     .forEach(ThrowingConsumer.of(sw::write));
+        }
+
+        log.info("get a single value as query result");
+        Long jobsCount = jdbc.queryForObject("SELECT count(*) FROM acct_pbs_record WHERE start_time BETWEEN ? AND ?",
+                Long.class, linuxTime1, linuxTime2);
+        log.info("jobs count {}", jobsCount);
+
+        log.info("get job ids");
+        List<String> ids = jdbc.queryForList("SELECT acct_id_string FROM acct_pbs_record WHERE start_time BETWEEN ? AND ?",
+                String.class, linuxTime1, linuxTime2);
+
+        log.info("get jobs from array of ids");
+        try (SequenceWriter sw = csvSequenceWriter(Job.class, "jobsByIds.csv")) {
+            List<Job> jobs = jdbc.query("""
+                            SELECT
+                                acct_id_string,
+                                jobname,
+                                queue,
+                                to_timestamp(start_time) as start_time,
+                                to_timestamp(end_time) as end_time
+                                FROM acct_pbs_record
+                                WHERE acct_id_string = ANY(?)
+                                ORDER BY start_time, acct_id_string
+                            """,
+                    pst -> pst.setArray(1, pst.getConnection().createArrayOf(JDBCType.VARCHAR.name(), ids.toArray(new String[0]))),
+                    new DataClassRowMapper<>(Job.class));
+            jobs.forEach(ThrowingConsumer.of(sw::write));
         }
     }
 
