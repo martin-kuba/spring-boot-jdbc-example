@@ -108,9 +108,9 @@ public class Main implements CommandLineRunner {
                                 queue,
                                 to_timestamp(start_time) as start_time,
                                 to_timestamp(end_time) as end_time
-                                FROM acct_pbs_record
-                                WHERE acct_id_string = ANY(?)
-                                ORDER BY start_time, acct_id_string
+                            FROM acct_pbs_record
+                            WHERE acct_id_string = ANY(?)
+                            ORDER BY start_time, acct_id_string
                             """,
                     pst -> pst.setArray(1, pst.getConnection().createArrayOf(JDBCType.VARCHAR.name(), ids.toArray(new String[0]))),
                     new DataClassRowMapper<>(Job.class));
